@@ -63,7 +63,9 @@ I2C_HandleTypeDef hi2c1;
 
 // Constants
 #define RAD_TO_DEG 57.2957795131f
+#define DEG_TO_RAD 0.0174532925f
 #define G_MPU 9.81000000f
+#define COMP_FILTER_ALPHA 0.0500f
 
 // IMU Variables
 int16_t Accel_X_RAW = 0;
@@ -78,9 +80,18 @@ int16_t IMUstate = 0;
 
 float Ax, Ay, Az, Gx, Gy, Gz;
 
-float theta_x = 0;
-float theta_y = 0;
-float theta_z = 0;
+float phiHat_accel_rad = 0;
+float thetaHat_accel_rad = 0;
+float psiHat_accel_rad = 0;
+
+float phiDot_rps = 0;
+float thetaDot_rps = 0;
+float psiDot_rps = 0;
+
+float phiHat_rad = 0;
+float thetaHat_rad = 0;
+float psiHat_rad = 0;
+
 
 
 uint8_t LEDstate = 0;
@@ -155,14 +166,20 @@ void MPU6050_Read_Accel (void)
 	Accel_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data [3]);
 	Accel_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data [5]);
 
+
+
 	/*** convert the RAW values into acceleration in 'g'
 	     we have to divide according to the Full scale value set in FS_SEL
 	     I have configured FS_SEL = 0. So I am dividing by 16384.0
 	     for more details check ACCEL_CONFIG Register              ****/
 
-	Ax = (float)Accel_X_RAW/16384.0;
-	Ay = (float)Accel_Y_RAW/16384.0;
-	Az = (float)Accel_Z_RAW/16384.0;
+//	Ax = (float)Accel_X_RAW/16384.0;
+//	Ay = (float)Accel_Y_RAW/16384.0;
+//	Az = (float)Accel_Z_RAW/16384.0;
+
+	Ay = -1*(float)Accel_X_RAW/16384.0;
+	Ax = -1*(float)Accel_Y_RAW/16384.0;
+	Az = -1*(float)Accel_Z_RAW/16384.0;
 }
 
 void MPU6050_Read_Gyro (void)
@@ -176,14 +193,19 @@ void MPU6050_Read_Gyro (void)
 	Gyro_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data [3]);
 	Gyro_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data [5]);
 
+
 	/*** convert the RAW values into dps (ｰ/s)
 	     we have to divide according to the Full scale value set in FS_SEL
 	     I have configured FS_SEL = 0. So I am dividing by 131.0
 	     for more details check GYRO_CONFIG Register              ****/
 
-	Gx = (float)Gyro_X_RAW/131.0;
-	Gy = (float)Gyro_Y_RAW/131.0;
-	Gz = (float)Gyro_Z_RAW/131.0;
+//	Gx = DEG_TO_RAD*(float)Gyro_X_RAW/131.0;
+//	Gy = DEG_TO_RAD*(float)Gyro_Y_RAW/131.0;
+//	Gz = DEG_TO_RAD*(float)Gyro_Z_RAW/131.0;
+
+	Gy = -DEG_TO_RAD*(float)Gyro_X_RAW/131.0;
+	Gx = -DEG_TO_RAD*(float)Gyro_Y_RAW/131.0;
+	Gz = -DEG_TO_RAD*(float)Gyro_Z_RAW/131.0;
 }
 
 /* USER CODE END 0 */
@@ -223,10 +245,9 @@ int main(void)
   char logBuf[256];
   uint32_t USB_Timer = 0;
 
-  IMUstate = MPU6050_Init();
-
   // Blue LED
   GPIOC->MODER |= 1U<<26; //PC13 as output
+  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
 
   // Solenoid MOSFET GPIOs, one of these pins fucks up USB
 //  GPIOA->MODER |= 1U<<16; //PA8 as output, ROLL +
@@ -236,6 +257,32 @@ int main(void)
 //  GPIOA->MODER |= 1U<<22; //PA11 as output
 //  GPIOA->MODER |= 1U<<24; //PA12 as output
 //  GPIOA->MODER |= 1U<<30; //PA15 as output
+
+  IMUstate = MPU6050_Init();
+
+  if(IMUstate == 0x68){
+	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+	  HAL_Delay(150);
+	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+	  HAL_Delay(150);
+	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+	  HAL_Delay(150);
+	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+	  HAL_Delay(150);
+	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+	  HAL_Delay(150);
+	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+  } else {
+	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+	  HAL_Delay(750);
+	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+	  HAL_Delay(750);
+	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+	  HAL_Delay(750);
+	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+  }
+
+
 
   /* USER CODE END 2 */
 
@@ -262,19 +309,38 @@ int main(void)
 		  }
 	  }
 
-	  // Read IMU and obtain angular velocity & acceleration
-	  MPU6050_Read_Accel();
-	  MPU6050_Read_Gyro();
-
-	  // Roll Angle
-	  theta_x = atanf( Ay / Az ) * RAD_TO_DEG;
-
-	  // Pitch Angle
-	  theta_y = asinf( Ax / G_MPU ) * RAD_TO_DEG;
-
 	  // Send Data through USB, according to sample time
 	  if( (HAL_GetTick() - USB_Timer) >= SAMPLE_TIME_USB_MS){
-		  sprintf(logBuf,"%0.3f,%0.3f\r\n",theta_x,theta_y);
+
+		  	  // Read IMU and obtain angular velocity & acceleration
+		  MPU6050_Read_Accel();
+		  MPU6050_Read_Gyro();
+
+	//	  // Roll Angle
+	//	  phiHat_deg = atanf( Ay / Az ) * RAD_TO_DEG;
+	//
+	//	  // Pitch Angle
+	//	  thetaHat_deg = asinf( Ax / G_MPU ) * RAD_TO_DEG;
+
+		  // Roll & Pitch Angle from Accelerometer
+		  phiHat_accel_rad = atanf( Ax / Az );
+		  thetaHat_accel_rad = asinf( Ay / G_MPU )*(RAD_TO_DEG/4);
+
+		  // Transform body rates to Euler Rates
+		  phiDot_rps = Gx + (tanf(thetaHat_rad) * (Gy * sinf(phiHat_rad) + ( Gz * cosf(phiHat_rad))));
+		  thetaDot_rps = cosf(phiHat_rad) * Gy - sinf(phiHat_rad) * Gz;
+
+
+		  // Combine Accel & Gyro data
+		  phiHat_rad = (COMP_FILTER_ALPHA*phiHat_accel_rad) + (1.0f - COMP_FILTER_ALPHA)
+				  * (phiHat_rad + (SAMPLE_TIME_USB_MS/1000.0f) * phiDot_rps);
+
+		  thetaHat_rad = (COMP_FILTER_ALPHA*thetaHat_accel_rad) + (1.0f - COMP_FILTER_ALPHA)
+		  				  * (thetaHat_rad + (SAMPLE_TIME_USB_MS/1000.0f) * thetaDot_rps);
+
+
+		  //sprintf(logBuf,"%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",Ax,Ay,Az,Gx* RAD_TO_DEG,Gy* RAD_TO_DEG,Gz* RAD_TO_DEG);
+		  sprintf(logBuf,"%0.3f,%0.3f\r\n",phiHat_rad* RAD_TO_DEG,thetaHat_rad* RAD_TO_DEG);
 		  CDC_Transmit_FS((uint8_t *) logBuf, strlen(logBuf));
 		  USB_Timer = HAL_GetTick();
 
