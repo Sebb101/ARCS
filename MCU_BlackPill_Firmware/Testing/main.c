@@ -249,13 +249,13 @@ int main(void)
   GPIOC->MODER |= 1U<<26; //PC13 as output
   GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
 
-  // Solenoid MOSFET GPIOs, one of these pins fucks up USB
-//  GPIOA->MODER |= 1U<<16; //PA8 as output, ROLL +
-//  GPIOA->MODER |= 1U<<18; //PA9 as output, ROLL -
+  // Solenoid MOSFET GPIOs
+  GPIOB->MODER |= 1U<<6; //PB3 as output, ROLL +
+  GPIOB->MODER |= 1U<<8; //PB4 as output, ROLL -
 //
 //  GPIOA->MODER |= 1U<<20; //PA10 as output
-//  GPIOA->MODER |= 1U<<22; //PA11 as output
-//  GPIOA->MODER |= 1U<<24; //PA12 as output
+//  GPIOA->MODER |= 1U<<22; //PA11 as output <- stupid, these are the USB pins
+//  GPIOA->MODER |= 1U<<24; //PA12 as output <- stupid, these are the USB pins
 //  GPIOA->MODER |= 1U<<30; //PA15 as output
 
   IMUstate = MPU6050_Init();
@@ -340,7 +340,7 @@ int main(void)
 
 
 		  //sprintf(logBuf,"%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",Ax,Ay,Az,Gx* RAD_TO_DEG,Gy* RAD_TO_DEG,Gz* RAD_TO_DEG);
-		  sprintf(logBuf,"%0.3f,%0.3f\r\n",phiHat_rad* RAD_TO_DEG,thetaHat_rad* RAD_TO_DEG);
+		  sprintf(logBuf,"%0.3f,%0.3f,%0.1f,%0.1f\r\n",phiHat_rad* RAD_TO_DEG,thetaHat_rad* RAD_TO_DEG,(float)roll_plus,(float)roll_minus);
 		  CDC_Transmit_FS((uint8_t *) logBuf, strlen(logBuf));
 		  USB_Timer = HAL_GetTick();
 
@@ -348,24 +348,24 @@ int main(void)
 
 
 	 // Control
-//	  if(roll_plus){
-//		  // Actuate Roll +, PA8
-//		  GPIOA->ODR |= 1U<<8; //Set PA13 as HIGH
-//		  roll_plus = 0;
-//
-//	  } else {
-//		  GPIOA->ODR = ~(~(GPIOC->ODR) | 1U<<8); //Set PC13 as LOW
-//		  roll_plus = 1;
-//	  }
-//
-//	  if(roll_minus){
-//		  // Actuate Roll -, PA9
-//		  GPIOA->ODR |= 1U<<9; //Set PA13 as HIGH
-//		  roll_minus = 0;
-//	  } else {
-//		  GPIOA->ODR = ~(~(GPIOC->ODR) | 1U<<9); //Set PC13 as LOW
-//		  roll_minus = 1;
-//	  }
+	  if( (phiHat_rad* RAD_TO_DEG) > 25){
+		  // Actuate Roll +, PB3
+		  GPIOB->ODR |= 1U<<3; //Set PB3 as HIGH
+		  roll_plus = 1;
+
+	  } else {
+		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<3); //Set PB3 as LOW
+		  roll_plus = 0;
+	  }
+
+	  if( (phiHat_rad* RAD_TO_DEG) < -25){
+		  // Actuate Roll -, PB4
+		  GPIOB->ODR |= 1U<<4; //Set PB4 as HIGH
+		  roll_minus = 1;
+	  } else {
+		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<4); //Set PB3 as LOW
+		  roll_minus = 0;
+	  }
 
 
 
