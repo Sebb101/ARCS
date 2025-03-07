@@ -26,6 +26,7 @@
 #include "string.h"
 #include <math.h>
 #include "usbd_cdc_if.h"
+#include "MPU9250.h"
 
 /* USER CODE END Includes */
 
@@ -49,7 +50,13 @@ I2C_HandleTypeDef hi2c1;
 
 /* USER CODE BEGIN PV */
 
-// IMMU Addresses & Commands
+// Solenoid Registars
+
+//MPU9250
+MPU9255_t MPU9255;
+
+
+// MPU6050 Addresses & Commands
 #define MPU6050_ADDR 0xD0
 
 #define SMPLRT_DIV_REG 0x19
@@ -61,11 +68,7 @@ I2C_HandleTypeDef hi2c1;
 #define PWR_MGMT_1_REG 0x6B
 #define WHO_AM_I_REG 0x75
 
-// Constants
-#define RAD_TO_DEG 57.2957795131f
-#define DEG_TO_RAD 0.0174532925f
-#define G_MPU 9.81000000f
-#define COMP_FILTER_ALPHA 0.0500f
+
 
 // IMU Variables
 int16_t Accel_X_RAW = 0;
@@ -80,32 +83,57 @@ int16_t IMUstate = 0;
 
 float Ax, Ay, Az, Gx, Gy, Gz;
 
+// Constants
+#define RAD_TO_DEG 57.2957795131f
+#define DEG_TO_RAD 0.0174532925f
+#define G_MPU 9.81000000f
+#define COMP_FILTER_ALPHA 0.0500f
+
+// Filter Variables
 float phiHat_accel_rad = 0;
 float thetaHat_accel_rad = 0;
 float psiHat_accel_rad = 0;
-
 float phiDot_rps = 0;
 float thetaDot_rps = 0;
 float psiDot_rps = 0;
-
 float phiHat_rad = 0;
 float thetaHat_rad = 0;
 float psiHat_rad = 0;
 
+float Gx_bias, Gy_bias, Gz_bias = 0;
+float Gx_sum, Gy_sum, Gz_sum = 0;
 
 
+// Control/Indication Variables
 uint8_t LEDstate = 0;
 uint32_t LEDtimer = 500;
 
-
 uint8_t roll_plus = 0;
 uint8_t roll_minus = 0;
+
+// test Sequence variables
+#define Roll_plus_test 1
+#define Roll_minus_test 2
+#define Pitch_plus_test 3
+#define Pitch_minus_test 4
+#define Yaw_plus_test 5
+#define Yaw_minus_test 6
+#define SpeedTest 7
+#define stop_roll 8
+
+#define test_interval_ms 1000.0f
+int hertz = 1;
+
+int TestState = 0;
+int Solenoid_timer = 0;
+int Speedtest_timer = 0;
+uint8_t Solenoid_toggleState = 0;
+
 
 int bootTime;
 
 // Connectivity
 #define SAMPLE_TIME_USB_MS 20
-
 
 
 /* USER CODE END PV */
@@ -121,6 +149,53 @@ static void MX_I2C1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+//void solenoidIndFire(GPIO_TypeDef port,uint8_t pin,int timeFire,int boot){
+//
+//	// ROLL +
+//	if(boot<timeFire){
+//		port->ODR |= 1U<<pin; //Set PB9 as HIGH
+//	} else{
+//		port->ODR = ~(~(port->ODR) | 1U<<pin); //Set PB9 as LOW
+//	}
+//
+//}
+
+void SolenoidChecker(void){
+	// ROLL +
+	GPIOB->ODR |= 1U<<9; //Set PB9 as HIGH
+	HAL_Delay(150);
+	GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<9); //Set PB9 as LOW
+
+	// ROLL -
+	HAL_Delay(150);
+	GPIOB->ODR |= 1U<<8; //Set PB8 as HIGH
+	HAL_Delay(150);
+	GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<8); //Set PB8 as LOW
+
+	// Pitch +
+	HAL_Delay(150);
+	GPIOB->ODR |= 1U<<5; //Set PB5 as HIGH
+	HAL_Delay(150);
+	GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<5); //Set PB5 as LOW
+
+	// Pitch -
+	GPIOB->ODR |= 1U<<4; //Set PB4 as HIGH
+	HAL_Delay(150);
+	GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<4); //Set PB4 as LOW
+
+	// Yaw +
+	HAL_Delay(150);
+	GPIOB->ODR |= 1U<<3; //Set PB3 as HIGH
+	HAL_Delay(150);
+	GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<3); //Set PB3 as LOW
+
+	// Yaw -
+	HAL_Delay(150);
+	GPIOA->ODR |= 1U<<15; //Set PA15 as HIGH
+	HAL_Delay(150);
+	GPIOA->ODR = ~(~(GPIOA->ODR) | 1U<<15); //Set PA15 as LOW
+
+}
 
 
 int16_t MPU6050_Init (void)
@@ -166,20 +241,14 @@ void MPU6050_Read_Accel (void)
 	Accel_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data [3]);
 	Accel_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data [5]);
 
-
-
 	/*** convert the RAW values into acceleration in 'g'
 	     we have to divide according to the Full scale value set in FS_SEL
 	     I have configured FS_SEL = 0. So I am dividing by 16384.0
 	     for more details check ACCEL_CONFIG Register              ****/
 
-//	Ax = (float)Accel_X_RAW/16384.0;
-//	Ay = (float)Accel_Y_RAW/16384.0;
-//	Az = (float)Accel_Z_RAW/16384.0;
-
-	Ay = -1*(float)Accel_X_RAW/16384.0;
-	Ax = -1*(float)Accel_Y_RAW/16384.0;
-	Az = -1*(float)Accel_Z_RAW/16384.0;
+	Ax = (float)Accel_X_RAW/16384.0;
+	Ay = (float)Accel_Y_RAW/16384.0;
+	Az = (float)Accel_Z_RAW/16384.0;
 }
 
 void MPU6050_Read_Gyro (void)
@@ -193,19 +262,14 @@ void MPU6050_Read_Gyro (void)
 	Gyro_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data [3]);
 	Gyro_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data [5]);
 
-
 	/*** convert the RAW values into dps (ｰ/s)
 	     we have to divide according to the Full scale value set in FS_SEL
 	     I have configured FS_SEL = 0. So I am dividing by 131.0
 	     for more details check GYRO_CONFIG Register              ****/
 
-//	Gx = DEG_TO_RAD*(float)Gyro_X_RAW/131.0;
-//	Gy = DEG_TO_RAD*(float)Gyro_Y_RAW/131.0;
-//	Gz = DEG_TO_RAD*(float)Gyro_Z_RAW/131.0;
-
-	Gy = -DEG_TO_RAD*(float)Gyro_X_RAW/131.0;
-	Gx = -DEG_TO_RAD*(float)Gyro_Y_RAW/131.0;
-	Gz = -DEG_TO_RAD*(float)Gyro_Z_RAW/131.0;
+	Gx = DEG_TO_RAD*(float)Gyro_X_RAW/131.0;
+	Gy = DEG_TO_RAD*(float)Gyro_Y_RAW/131.0;
+	Gz = DEG_TO_RAD*(float)Gyro_Z_RAW/131.0;
 }
 
 /* USER CODE END 0 */
@@ -242,6 +306,7 @@ int main(void)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
 
+
   char logBuf[256];
   uint32_t USB_Timer = 0;
 
@@ -249,40 +314,124 @@ int main(void)
   GPIOC->MODER |= 1U<<26; //PC13 as output
   GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
 
+
   // Solenoid MOSFET GPIOs
-  GPIOB->MODER |= 1U<<6; //PB3 as output, ROLL +
-  GPIOB->MODER |= 1U<<8; //PB4 as output, ROLL -
+  GPIOB->MODER |= 1U<<16; //PB8 as output, ROLL -
+  GPIOB->MODER |= 1U<<18; //PB9 as output, ROLL +
+
+  GPIOB->MODER |= 1U<<10; //PB5 as output, Pitch +
+  GPIOB->MODER |= 1U<<8; //PB4 as output, Pitch -
+
+  GPIOB->MODER |= 1U<<6; //PB3 as output, Yaw +
+  GPIOA->MODER |= 1U<<30; //PA15 as output, Yaw -
+
+
+  // Solenoid Check
+  // Runs thro every MOSFET
+
+  //SolenoidChecker();
+
+  //uint8_t readData1;
+  //uint8_t writeData1;
+
+  //IMUstate = MPU6050_Init();
+  //HAL_I2C_Mem_Read(&hi2c1, MPU9250_ADDRESS, WHO_AM_I_MPU9250, 1, &readData, 1, i2c_timeout);
+  //IMUstate = readData;
+
+//  writeData1 = 0x22;
+//  HAL_I2C_Mem_Write(&hi2c1, MPU9250_ADDRESS, INT_PIN_CFG, 1, &writeData1, 1, i2c_timeout);
 //
-//  GPIOA->MODER |= 1U<<20; //PA10 as output
-//  GPIOA->MODER |= 1U<<22; //PA11 as output <- stupid, these are the USB pins
-//  GPIOA->MODER |= 1U<<24; //PA12 as output <- stupid, these are the USB pins
-//  GPIOA->MODER |= 1U<<30; //PA15 as output
+//  HAL_I2C_Mem_Read(&hi2c1, AK8963_ADDRESS, AK8963_WHO_AM_I, 1, &readData1, 1, i2c_timeout);
+//  IMUstate = readData1;
 
-  IMUstate = MPU6050_Init();
-
-  if(IMUstate == 0x68){
-	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
-	  HAL_Delay(150);
-	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
-	  HAL_Delay(150);
-	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
-	  HAL_Delay(150);
-	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
-	  HAL_Delay(150);
-	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
-	  HAL_Delay(150);
-	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
-  } else {
-	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
-	  HAL_Delay(750);
-	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
-	  HAL_Delay(750);
-	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
-	  HAL_Delay(750);
-	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
-  }
+  while (MPU9255_Init(&hi2c1) == 1);
 
 
+//  if( (MPU_begin(&hi2c1, AD0_LOW, AFSR_4G, GFSR_500DPS, 0.98, 0.004)) == 1){
+//	  IMUstate = 1;
+//  }
+
+  // MPU6050 Code
+//  if(IMUstate == 0x68){
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	  HAL_Delay(150);
+//	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//	  HAL_Delay(150);
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	  HAL_Delay(150);
+//	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//	  HAL_Delay(150);
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	  HAL_Delay(150);
+//	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//
+//	  for (int i=0;i<200;i++){
+//
+//	  	  MPU6050_Read_Accel();
+//	  	  MPU6050_Read_Gyro();
+//
+//	  	  Gx_sum = (Gx*RAD_TO_DEG)+Gx_sum;
+//	  	  Gy_sum = (Gy*RAD_TO_DEG)+Gy_sum;
+//	  	  Gz_sum = (Gz*RAD_TO_DEG)+Gz_sum;
+//
+//	  	  HAL_Delay(10);
+//
+//	    }
+//
+//	    Gx_bias = Gx_sum / 200;
+//	    Gy_bias = Gy_sum / 200;
+//	    Gz_bias = Gz_sum / 200;
+//
+//	    GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	    HAL_Delay(150);
+//	    GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//	    HAL_Delay(150);
+//	    GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	    HAL_Delay(150);
+//	    GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//	    HAL_Delay(150);
+//	    GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	    HAL_Delay(150);
+//	    GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//
+//  } else {
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	  HAL_Delay(750);
+//	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//	  HAL_Delay(750);
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//	  HAL_Delay(750);
+//	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//  }
+
+  // MPU9250
+//  if(IMUstate == 1){
+//	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//  	  HAL_Delay(150);
+//  	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//  	  HAL_Delay(150);
+//  	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//  	  HAL_Delay(150);
+//  	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//  	  HAL_Delay(150);
+//  	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//  	  HAL_Delay(150);
+//  	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//
+//
+//
+//    } else {
+//  	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//  	  HAL_Delay(750);
+//  	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//  	  HAL_Delay(750);
+//  	  GPIOC->ODR |= 1U<<13; //Set PC13 as HIGH
+//  	  HAL_Delay(750);
+//  	  GPIOC->ODR = ~(~(GPIOC->ODR) | 1U<<13); //Set PC13 as LOW
+//    }
+
+
+  Solenoid_timer = HAL_GetTick();
 
   /* USER CODE END 2 */
 
@@ -293,9 +442,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-	  // Time
-	  bootTime = HAL_GetTick();
 
 	  // Blink Blue LED
 	  if( (HAL_GetTick() - LEDtimer) >= 500){
@@ -309,63 +455,186 @@ int main(void)
 		  }
 	  }
 
+
 	  // Send Data through USB, according to sample time
 	  if( (HAL_GetTick() - USB_Timer) >= SAMPLE_TIME_USB_MS){
 
-		  	  // Read IMU and obtain angular velocity & acceleration
-		  MPU6050_Read_Accel();
-		  MPU6050_Read_Gyro();
+		  // Read IMU and obtain angular velocity & acceleration
+		  //MPU6050_Read_Accel();
+		  //MPU6050_Read_Gyro();
+		  readAll(&hi2c1, &MPU9255);
 
-	//	  // Roll Angle
-	//	  phiHat_deg = atanf( Ay / Az ) * RAD_TO_DEG;
-	//
-	//	  // Pitch Angle
-	//	  thetaHat_deg = asinf( Ax / G_MPU ) * RAD_TO_DEG;
-
-		  // Roll & Pitch Angle from Accelerometer
-		  phiHat_accel_rad = atanf( Ax / Az );
-		  thetaHat_accel_rad = asinf( Ay / G_MPU )*(RAD_TO_DEG/4);
-
-		  // Transform body rates to Euler Rates
-		  phiDot_rps = Gx + (tanf(thetaHat_rad) * (Gy * sinf(phiHat_rad) + ( Gz * cosf(phiHat_rad))));
-		  thetaDot_rps = cosf(phiHat_rad) * Gy - sinf(phiHat_rad) * Gz;
-
-
-		  // Combine Accel & Gyro data
-		  phiHat_rad = (COMP_FILTER_ALPHA*phiHat_accel_rad) + (1.0f - COMP_FILTER_ALPHA)
-				  * (phiHat_rad + (SAMPLE_TIME_USB_MS/1000.0f) * phiDot_rps);
-
-		  thetaHat_rad = (COMP_FILTER_ALPHA*thetaHat_accel_rad) + (1.0f - COMP_FILTER_ALPHA)
-		  				  * (thetaHat_rad + (SAMPLE_TIME_USB_MS/1000.0f) * thetaDot_rps);
-
-
-		  //sprintf(logBuf,"%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",Ax,Ay,Az,Gx* RAD_TO_DEG,Gy* RAD_TO_DEG,Gz* RAD_TO_DEG);
-		  sprintf(logBuf,"%0.3f,%0.3f,%0.1f,%0.1f\r\n",phiHat_rad* RAD_TO_DEG,thetaHat_rad* RAD_TO_DEG,(float)roll_plus,(float)roll_minus);
+//		  sprintf(logBuf,"%0.3f,%0.3f,%0.3f,%d,%d,%0.3f,%0.3f,%0.3f\r\n",(Gx* RAD_TO_DEG) - Gx_bias,(Gy* RAD_TO_DEG) - Gy_bias,(Gz* RAD_TO_DEG) - Gz_bias,
+//				  roll_plus,roll_minus,Gx_bias,Gy_bias,Gz_bias);
+		  //sprintf(logBuf,"%0.3f,%0.3f,%0.1f,%0.1f\r\n",phiHat_rad* RAD_TO_DEG,thetaHat_rad* RAD_TO_DEG,(float)roll_plus,(float)roll_minus);
+		  sprintf(logBuf,"%0.3f,%0.3f,%0.3f,%0.3f,%0.3f,%0.3f\r\n",ax,ay,az,gx,gy,gz);
 		  CDC_Transmit_FS((uint8_t *) logBuf, strlen(logBuf));
 		  USB_Timer = HAL_GetTick();
+	  }
+
+	  // Test Sequence
+	  switch(TestState){
+		  case 0:
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  TestState++;
+			  }
+			  break;
+
+		  case Roll_plus_test:
+
+			  GPIOB->ODR |= 1U<<9; //Set PB9 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<9); //Set PB9 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case Roll_minus_test:
+
+			  GPIOB->ODR |= 1U<<8; //Set PB8 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<8); //Set PB8 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case Pitch_plus_test:
+
+			  GPIOB->ODR |= 1U<<5; //Set PB5 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<5); //Set PB5 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case Pitch_minus_test:
+
+			  GPIOB->ODR |= 1U<<4; //Set PB4 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<4); //Set PB4 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case Yaw_plus_test:
+
+			  GPIOB->ODR |= 1U<<3; //Set PB3 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<3); //Set PB3 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case Yaw_minus_test:
+
+			  GPIOA->ODR |= 1U<<15; //Set PA15 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  Speedtest_timer = HAL_GetTick();
+				  GPIOA->ODR = ~(~(GPIOA->ODR) | 1U<<15); //Set PA15 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		case SpeedTest:
+
+				if(Solenoid_toggleState){
+					GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<9); //Set PB9 as LOW
+				} else{
+					GPIOB->ODR |= 1U<<9; //Set PB9 as HIGH
+				}
+
+			  if( (HAL_GetTick() - Speedtest_timer) >= (test_interval_ms/hertz) ){
+				  Speedtest_timer = HAL_GetTick();
+				  if(Solenoid_toggleState){
+					  Solenoid_toggleState = 0;
+				  } else {
+					  Solenoid_toggleState = 1;
+				  }
+			  }
+
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= test_interval_ms){
+				  Solenoid_timer = HAL_GetTick();
+				  hertz++;
+			  }
+
+			  if(hertz>=6){
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<9); //Set PB9 as LOW
+				  TestState++;
+			  }
+
+			  break;
+
+		case stop_roll:
+
+			  GPIOB->ODR |= 1U<<8; //Set PB8 as HIGH
+
+			  if( (HAL_GetTick() - Solenoid_timer) >= (test_interval_ms*4)){
+				  Solenoid_timer = HAL_GetTick();
+				  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<8); //Set PB8 as LOW
+				  TestState++;
+			  }
+			  break;
+
+		default:
+			TestState = 10;
+			break;
 
 	  }
+
+
+
 
 
 	 // Control
-	  if( (phiHat_rad* RAD_TO_DEG) > 25){
-		  // Actuate Roll +, PB3
-		  GPIOB->ODR |= 1U<<3; //Set PB3 as HIGH
-		  roll_plus = 1;
 
-	  } else {
-		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<3); //Set PB3 as LOW
-		  roll_plus = 0;
-	  }
+	 // Current Plan
+	 // P - Controller
+	 // w_e = r * T
+	 // Torque_input = K_qu * delta_qu + K_w * delta_w
+	 // delta_w = w_d (desired angular rate) - w_e (estimated angular rate)
+	 // delta_qu = (4x1) (matrix), explains required rotation (angle change) [qx , qy, qz, q4], [axis, angle]
+	 //
 
-	  if( (phiHat_rad* RAD_TO_DEG) < -25){
-		  // Actuate Roll -, PB4
-		  GPIOB->ODR |= 1U<<4; //Set PB4 as HIGH
-		  roll_minus = 1;
-	  } else {
-		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<4); //Set PB3 as LOW
-		  roll_minus = 0;
-	  }
+	  // Rate of IC's change?
+	  // Average IC measurements (right now 50Hz)
+
+	  // EKF
+	  // I_r*w_e_dot = -w_e*I_r*w_e + T_t (from actuated or assumed to be zero if below min thrust/torque)
+
+
+//	  if( ( (Gz* RAD_TO_DEG) - Gz_bias) > 15){
+//		  // Actuate Roll +, PB3
+//		  GPIOB->ODR |= 1U<<3; //Set PB3 as HIGH
+//		  roll_plus = 1;
+//
+//	  } else {
+//		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<3); //Set PB3 as LOW
+//		  roll_plus = 0;
+//	  }
+//
+//	  if( ((Gz* RAD_TO_DEG) - Gz_bias) < -15){
+//		  // Actuate Roll -, PB4
+//		  GPIOB->ODR |= 1U<<4; //Set PB4 as HIGH
+//		  roll_minus = 1;
+//	  } else {
+//		  GPIOB->ODR = ~(~(GPIOB->ODR) | 1U<<4); //Set PB3 as LOW
+//		  roll_minus = 0;
+//	  }
 
 
 
@@ -472,12 +741,35 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_8
+                          |GPIO_PIN_9, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB3 PB4 PB5 PB8
+                           PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_8
+                          |GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
